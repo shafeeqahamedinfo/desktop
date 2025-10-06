@@ -22,61 +22,37 @@ jobs:
           # Remove any existing rule with the same name to avoid duplication
           netsh advfirewall firewall delete rule name="RDP-Tailscale" || $null
           
-          # For testing, allow any incoming connection on port 3389
+          # Allow RDP traffic on port 3389
           netsh advfirewall firewall add rule name="RDP-Tailscale" `
             dir=in action=allow protocol=TCP localport=3389
 
-          # Restart the Remote Desktop service to ensure changes take effect
           Restart-Service -Name TermService -Force
 
-      - name: Create RDP User with Secure Password
+      - name: Create RDP User with Fixed Password
         run: |
-          Add-Type -AssemblyName System.Security
-
-          $charSet = @{
-              Upper   = [char[]](65..90)      # A-Z
-              Lower   = [char[]](97..122)     # a-z
-              Number  = [char[]](48..57)      # 0-9
-              Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126))
-          }
-
-          $rawPassword = @()
-          $rawPassword += $charSet.Upper | Get-Random -Count 4
-          $rawPassword += $charSet.Lower | Get-Random -Count 4
-          $rawPassword += $charSet.Number | Get-Random -Count 4
-          $rawPassword += $charSet.Special | Get-Random -Count 4
-          $password = -join ($rawPassword | Sort-Object { Get-Random })
-
+          $username = "recyclezone"
+          $password = "shafeeqahamed"
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
 
-          # Create local user 'recyclezone' (if it doesn't already exist)
-          if (Get-LocalUser -Name "recyclezone" -ErrorAction SilentlyContinue) {
-            Write-Host "User 'recyclezone' already exists - resetting password."
-            $user = Get-LocalUser -Name "recyclezone"
-            $user | Set-LocalUser -Password $securePass
+          if (Get-LocalUser -Name $username -ErrorAction SilentlyContinue) {
+            Write-Host "User '$username' already exists — resetting password."
+            Set-LocalUser -Name $username -Password $securePass
           } else {
-            New-LocalUser -Name "recyclezone" -Password $securePass -AccountNeverExpires -Description "RDP user for GH runner"
+            New-LocalUser -Name $username -Password $securePass -AccountNeverExpires -Description "RDP user for GH runner"
           }
 
-          # Add to groups
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "recyclezone"
-          # If you intentionally want admin rights uncomment the next line (be cautious)
-          # Add-LocalGroupMember -Group "Administrators" -Member "recyclezone"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
+          # Uncomment if you want admin privileges (optional, risky)
+          # Add-LocalGroupMember -Group "Administrators" -Member $username
 
-          # Export credentials to GitHub Actions environment file (Runners read this file)
-          Add-Content -Path $env:GITHUB_ENV -Value "RDP_USER=recyclezone"
+          # Save credentials to environment
+          Add-Content -Path $env:GITHUB_ENV -Value "RDP_USER=$username"
           Add-Content -Path $env:GITHUB_ENV -Value "RDP_PASSWORD=$password"
 
-          # Mask the password in GitHub Actions logs (so it's not plain text in logs)
+          # Mask password from GitHub logs
           Write-Host "::add-mask::$password"
 
-          # Verify user exists now
-          if (-not (Get-LocalUser -Name "recyclezone" -ErrorAction SilentlyContinue)) {
-              Write-Error "User creation failed"
-              exit 1
-          } else {
-              Write-Host "User 'recyclezone' created/configured successfully."
-          }
+          Write-Host "User '$username' configured successfully."
 
       - name: Install Tailscale
         run: |
@@ -89,10 +65,9 @@ jobs:
 
       - name: Establish Tailscale Connection
         run: |
-          # Bring up Tailscale with the provided auth key and set a unique hostname
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
           
-          # Wait for Tailscale to assign an IP
+          # Wait for Tailscale IP
           $tsIP = $null
           $retries = 0
           while (-not $tsIP -and $retries -lt 10) {
@@ -100,38 +75,34 @@ jobs:
               Start-Sleep -Seconds 5
               $retries++
           }
-          
+
           if (-not $tsIP) {
               Write-Error "Tailscale IP not assigned. Exiting."
               exit 1
           }
 
           Add-Content -Path $env:GITHUB_ENV -Value "TAILSCALE_IP=$tsIP"
-          Write-Host "Tailscale IP detected: $tsIP"
+          Write-Host "Tailscale IP: $tsIP"
 
       - name: Verify RDP Accessibility
         run: |
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-          
-          # Test connectivity using Test-NetConnection against the Tailscale IP on port 3389
-          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
-          if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "TCP connection to RDP port 3389 failed"
+          Write-Host "Testing RDP connectivity on $env:TAILSCALE_IP..."
+          $test = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
+          if (-not $test.TcpTestSucceeded) {
+              Write-Error "RDP port not accessible!"
               exit 1
           }
-          Write-Host "TCP connectivity successful!"
+          Write-Host "RDP port is open and reachable!"
 
-      - name: Maintain Connection (prints connection info and keeps runner active)
+      - name: Maintain Connection
         run: |
-          Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "`n=== RDP ACCESS DETAILS ==="
           Write-Host "Address: $env:TAILSCALE_IP"
           Write-Host "Username: $env:RDP_USER"
-          # Password is masked in GitHub Actions logs by the ::add-mask:: call above
           Write-Host "Password: $env:RDP_PASSWORD"
-          Write-Host "==================`n"
+          Write-Host "==========================`n"
           
-          # Keep runner active indefinitely (or until manually cancelled)
           while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
+              Write-Host "[$(Get-Date)] RDP session active — use Ctrl+C or cancel workflow to stop"
               Start-Sleep -Seconds 300
           }
