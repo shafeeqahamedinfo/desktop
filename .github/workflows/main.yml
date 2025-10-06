@@ -9,27 +9,34 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - name: 🛠️ Setup RDP and Tailscale
+      - name: Setup RDP and Tailscale
         shell: pwsh
         run: |
           Write-Host "🚀 Starting RDP configuration..."
 
-          # === Step 1: Configure Password ===
+          # === Step 1: Configure User & Password ===
           $username = "runneradmin"
-          $password = "Ahamed@1234"
+          $password = "${{ secrets.RDP_PASSWORD }}"
 
           if ([string]::IsNullOrWhiteSpace($password)) {
               throw "❌ Missing RDP_PASSWORD secret. Please set it in GitHub → Settings → Secrets → Actions."
           }
 
           try {
-              Write-Host "🔐 Setting password for user: $username"
-              $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-              Set-LocalUser -Name $username -Password $securePass
-              Write-Host "✅ Password successfully set for $username"
-          }
-          catch {
-              Write-Host "⚠️ Failed to set password: $($_.Exception.Message)"
+              if (Get-LocalUser -Name $username -ErrorAction SilentlyContinue) {
+                  Write-Host "User '$username' exists — updating password."
+                  $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+                  Set-LocalUser -Name $username -Password $securePass
+              } else {
+                  Write-Host "Creating user '$username'..."
+                  $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+                  New-LocalUser -Name $username -Password $securePass -AccountNeverExpires -Description "RDP user for GitHub Actions"
+              }
+
+              Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
+              Write-Host "✅ User '$username' configured successfully."
+          } catch {
+              Write-Host "⚠️ Failed to configure user: $($_.Exception.Message)"
               exit 1
           }
 
@@ -37,8 +44,9 @@ jobs:
           Write-Host "🖥️ Enabling Remote Desktop..."
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Write-Host "✅ Remote Desktop enabled."
 
-          # === Step 3: Install and Configure Tailscale ===
+          # === Step 3: Install Tailscale ===
           Write-Host "🌐 Installing Tailscale..."
           choco install tailscale -y | Out-Null
 
@@ -51,9 +59,17 @@ jobs:
           & "$env:ProgramFiles\Tailscale\tailscale.exe" logout | Out-Null
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=$authKey --hostname="GitHubRDP" --accept-routes
 
-          # === Step 4: Verify Connection ===
+          # === Step 4: Wait for Tailscale IP ===
           Write-Host "🔎 Checking Tailscale IP..."
-          $tsIP = (& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4) 2>$null
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 12) {
+              Start-Sleep -Seconds 5
+              try {
+                  $tsIP = (& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4).Trim()
+              } catch { }
+              $retries++
+          }
 
           if (-not $tsIP) {
               Write-Host "❌ Failed to get Tailscale IP. Check your AUTH KEY validity."
@@ -63,15 +79,13 @@ jobs:
 
           Write-Host "✅ Tailscale Connected! IP Address: $tsIP"
 
-          # === Step 5: Display Login Info ===
+          # === Step 5: Display Connection Info ===
           Write-Host ""
           Write-Host "=============================="
           Write-Host "✅ RDP Setup Complete!"
           Write-Host "Username: $username"
-          Write-Host "Password: $password "
+          Write-Host "Password: (hidden, see GitHub Secrets)"
           Write-Host "Tailscale IP: $tsIP"
           Write-Host "=============================="
           Write-Host ""
-          Write-Host "💡 Connect using:"
-          Write-Host "    Remote Desktop → $tsIP"
-          Write-Host ""
+          Write-Host "💡 Connect using Remote Desktop → $tsIP"
