@@ -32,7 +32,7 @@ jobs:
       - name: Create RDP User (recyclezone)
         run: |
           $username = "recyclezone"
-          $password = "Shafeeq@123"
+          $password = ""
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
 
           # Create or update user
