@@ -36,8 +36,7 @@ jobs:
               
               Lower   = [char[]](97..122)     # a-z
               Number  = [char[]](48..57)      # 0-9
-              Special = ([char[]](33..47) # Special characters
-          }
+                        }
           $rawPassword = @()
           $rawPassword += $charSet.Upper | Get-Random -Count 4
           $rawPassword += $charSet.Lower | Get-Random -Count 4
