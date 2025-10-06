@@ -16,7 +16,7 @@ jobs:
 
           # === Step 1: Configure Password ===
           $username = "runneradmin"
-          $password = "${{ secrets.RDP_PASSWORD }}"
+          $password = "Ahamed@1234"
 
           if ([string]::IsNullOrWhiteSpace($password)) {
               throw "❌ Missing RDP_PASSWORD secret. Please set it in GitHub → Settings → Secrets → Actions."
