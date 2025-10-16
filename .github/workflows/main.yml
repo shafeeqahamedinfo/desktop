@@ -1,4 +1,3 @@
-
 name: recyclezone
 
 on:
@@ -27,29 +26,19 @@ jobs:
           # Restart Remote Desktop service
           Restart-Service -Name TermService -Force
 
-      - name: Create RDP User with Secure Password
+      - name: Create RDP User with Custom Password
         run: |
-          Add-Type -AssemblyName System.Security
-          $charSet = @{
-              Upper   = [char[]](65..90)
-              Lower   = [char[]](97..122)
-              Number  = [char[]](48..57)
-              Special = [char[]](33..47 + 58..64 + 91..96 + 123..126)
-          }
-
-          $rawPassword = @()
-          $rawPassword += $charSet.Upper | Get-Random -Count 4
-          $rawPassword += $charSet.Lower | Get-Random -Count 4
-          $rawPassword += $charSet.Number | Get-Random -Count 4
-          $rawPassword += $charSet.Special | Get-Random -Count 4
-          $password = -join ($rawPassword | Sort-Object { Get-Random })
+          # === Custom Password Section ===
+          $password = "Recycle@1234"   # <-- Change this to your desired password
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-
           $userName = "recyclezone"
+
           if (-not (Get-LocalUser -Name $userName -ErrorAction SilentlyContinue)) {
               New-LocalUser -Name $userName -Password $securePass -AccountNeverExpires
               Add-LocalGroupMember -Group "Administrators" -Member $userName
               Add-LocalGroupMember -Group "Remote Desktop Users" -Member $userName
+          } else {
+              Set-LocalUser -Name $userName -Password $securePass
           }
 
           echo "RDP_USER=$userName" >> $env:GITHUB_ENV
@@ -108,4 +97,3 @@ jobs:
               Write-Host "[$(Get-Date)] RDP Active"
               Start-Sleep -Seconds 60
           }
-
