@@ -19,11 +19,11 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
                              -Name "SecurityLayer" -Value 0 -Force
 
-          # Remove any existing firewall rule and add a new one
+          # Firewall rule for RDP
           netsh advfirewall firewall delete rule name="RDP-Tailscale"
           netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
 
-          # Restart Remote Desktop service
+          # Restart RDP service
           Restart-Service -Name TermService -Force
 
       - name: Create RDP User with Custom Password
@@ -56,44 +56,59 @@ jobs:
         run: |
           $authKey = '${{ secrets.TAILSCALE_AUTH_KEY }}'
           $hostname = "gh-runner-$env:GITHUB_RUN_ID"
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=$authKey --hostname=$hostname
 
+          if (-not $authKey -or $authKey -eq "") {
+              Write-Error "❌ Missing TAILSCALE_AUTH_KEY secret. Add it in GitHub → Settings → Secrets → Actions."
+              exit 1
+          }
+
+          Write-Host "🔑 Attempting Tailscale login..."
+          $tsUp = & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=$authKey --hostname=$hostname 2>&1
+
+          if ($tsUp -match "invalid key" -or $tsUp -match "NeedsLogin") {
+              Write-Error "❌ Invalid or expired Tailscale Auth Key. Regenerate it at https://login.tailscale.com/admin/settings/authkeys"
+              exit 1
+          }
+
+          # Wait for Tailscale IP assignment
           $tsIP = $null
           $retries = 0
           while (-not $tsIP -and $retries -lt 10) {
               $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              if ($tsIP) { break }
               Start-Sleep -Seconds 5
               $retries++
           }
 
           if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned. Exiting."
+              Write-Error "❌ Tailscale IP not assigned. Exiting."
               exit 1
           }
 
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+          Write-Host "✅ Connected to Tailscale with IP: $tsIP"
 
       - name: Verify RDP Accessibility
         run: |
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          Write-Host "Testing RDP connection..."
           $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
           if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "TCP connection to RDP port 3389 failed"
+              Write-Error "❌ TCP connection to RDP port 3389 failed"
               exit 1
           }
-          Write-Host "TCP connectivity successful!"
+          Write-Host "✅ TCP connectivity successful!"
 
       - name: Maintain RDP Access
         run: |
           Write-Host "`n=== RDP ACCESS ==="
-          Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: $env:RDP_USER"
-          Write-Host "Password: $env:RDP_PASS"
+          Write-Host "🖥️  Address: $env:TAILSCALE_IP"
+          Write-Host "👤 Username: $env:RDP_USER"
+          Write-Host "🔑 Password: $env:RDP_PASS"
           Write-Host "==================`n"
 
-          # Keep runner active with a heartbeat for up to 1 hour
+          # Keep runner active for 1 hour
           $endTime = (Get-Date).AddHours(1)
           while ((Get-Date) -lt $endTime) {
-              Write-Host "[$(Get-Date)] RDP Active"
+              Write-Host "[$(Get-Date)] 💡 RDP Session Active"
               Start-Sleep -Seconds 60
           }
