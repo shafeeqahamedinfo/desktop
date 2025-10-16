@@ -1,0 +1,48 @@
+name: Connect runner to Tailscale
+
+on:
+  workflow_dispatch:    # run manually from Actions -> Run workflow
+  push:
+    branches:
+      - main
+
+jobs:
+  tailscale-connect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo (optional)
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y curl gnupg2 apt-transport-https
+
+      - name: Add Tailscale apt repo and install
+        run: |
+          # official install script (idempotent)
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/focal.gpg | sudo apt-key add -
+          echo "deb https://pkgs.tailscale.com/stable/ubuntu focal main" | sudo tee /etc/apt/sources.list.d/tailscale.list
+          sudo apt-get update -y
+          sudo apt-get install -y tailscale
+
+      - name: Start tailscaled (background service)
+        run: |
+          sudo systemctl enable --now tailscaled || sudo tailscaled --state=/tmp/tailscaled.state &> /tmp/tailscaled.log &
+
+      - name: Bring node up with authkey
+        env:
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+        run: |
+          # Use a short hostname to identify the runner in admin panel
+          HOSTNAME=github-actions-runner-${{ github.run_id }}
+          sudo tailscale up --authkey="$TAILSCALE_AUTHKEY" --hostname="$HOSTNAME" --accept-routes || (sudo tailscale logout && sudo tailscale up --authkey="$TAILSCALE_AUTHKEY" --hostname="$HOSTNAME" --accept-routes)
+
+      - name: Verify Tailscale status
+        run: |
+          sudo tailscale status --json || sudo tailscale status
+
+      - name: Do work that needs Tailscale network
+        run: |
+          # Example: ping another Tailnet machine
+          sudo tailscale ping -c 2 your-other-node
