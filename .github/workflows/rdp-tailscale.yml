@@ -1,4 +1,4 @@
-name: Windows RDP via Tailscale (Easy Password)
+name: Windows RDP via Tailscale (Easy Password + Debug)
 
 on:
   workflow_dispatch:
@@ -14,19 +14,22 @@ jobs:
     timeout-minutes: 360
 
     steps:
+      # --- Enable RDP ---------------------------------------------------------
       - name: Enable RDP & Firewall
         run: |
           Write-Host "🔧 Enabling Remote Desktop..."
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+                           -Name "fDenyTSConnections" -Value 0 -Force
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Restart-Service -Name TermService -Force
           Write-Host "✅ RDP enabled and firewall open."
 
+      # --- Create RDP User ----------------------------------------------------
       - name: Create RDP User (Easy Password)
         run: |
           Write-Host "👤 Creating RDP user..."
           $user = "rdpuser"
-          $pass = "${{ github.event.inputs.password }}"   # Password from input
+          $pass = "${{ github.event.inputs.password }}"
           if (-not $pass) { $pass = "Password123" }
           $secure = ConvertTo-SecureString $pass -AsPlainText -Force
 
@@ -43,6 +46,7 @@ jobs:
           echo "RDP_PASS=$pass" >> $env:GITHUB_ENV
           Write-Host "✅ RDP user created: $user / Password: $pass"
 
+      # --- Install Tailscale --------------------------------------------------
       - name: Install Tailscale
         run: |
           Write-Host "⬇️ Installing Tailscale..."
@@ -54,19 +58,34 @@ jobs:
           Start-Sleep -Seconds 5
           Write-Host "✅ Installed Tailscale."
 
+      # --- Connect to Tailnet (with Debug) -----------------------------------
       - name: Connect to Tailnet
         env:
           TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
           Write-Host "🔗 Connecting to Tailnet..."
           $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
-          & $ts up --authkey $env:TAILSCALE_AUTHKEY --hostname "gh-runner-${env:GITHUB_RUN_ID}" --accept-dns --accept-routes
+
+          try {
+            & $ts up --authkey $env:TAILSCALE_AUTHKEY --hostname "gh-runner-${env:GITHUB_RUN_ID}" --accept-dns --accept-routes
+          } catch {
+            Write-Host "⚠️ tailscale up command failed!"
+            Get-Content "C:\ProgramData\Tailscale\tailscaled.log" -Tail 50 -ErrorAction SilentlyContinue
+            exit 1
+          }
+
           Start-Sleep -Seconds 10
           $ip = & $ts ip -4
-          if (-not $ip) { Write-Error "❌ No Tailscale IP assigned."; exit 1 }
+          if (-not $ip) {
+            Write-Host "⚠️ No Tailscale IP found, checking logs..."
+            Get-Content "C:\ProgramData\Tailscale\tailscaled.log" -Tail 50 -ErrorAction SilentlyContinue
+            exit 1
+          }
+
           echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
           Write-Host "✅ Connected to Tailnet: $ip"
 
+      # --- Display Connection Info -------------------------------------------
       - name: Show RDP Connection Info
         run: |
           Write-Host "`n=============================="
@@ -78,6 +97,7 @@ jobs:
           Write-Host "  mstsc /v:$env:TAILSCALE_IP /u:$env:RDP_USER"
           Write-Host "==============================`n"
 
+      # --- Keep the session alive --------------------------------------------
       - name: Keep RDP session alive
         run: |
           Write-Host "🔒 RDP session active. You can connect using the details above."
